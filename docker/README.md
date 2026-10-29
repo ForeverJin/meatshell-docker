@@ -102,6 +102,10 @@ curl -si -X POST http://192.168.8.114:8765/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual","version":"1"}}}'
 ```
 
+token 的 `exp` 可以设得比 300 秒长（例如 `--ttl 86400`）；服务对**单次工具
+调用**的上限固定为 300 秒或 token 到期，取二者中较早者。当前版本不支持吊销
+单个 token，收紧权限只能换密钥并重启。
+
 `mint-token.py` 只适合自用/自动化：它直接用私钥签 token，跳过了 OAuth 授权码
 流程。ChatGPT 之类需要完整 OAuth 2.1（authorization code + PKCE）的客户端，
 必须接入真实 IdP，并把 `issuer` / `resource` / `jwks_file` 换成该 IdP 的配置，
