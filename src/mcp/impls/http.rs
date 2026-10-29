@@ -42,9 +42,21 @@ struct HttpConfig {
     oauth: OAuthConfig,
     #[serde(default)]
     allowed_origins: Vec<String>,
+    /// Serve the operator web UI (session management) on the same listener.
+    #[serde(default = "default_web_ui")]
+    web_ui: bool,
+}
+fn default_web_ui() -> bool {
+    true
 }
 fn default_bind() -> SocketAddr {
     "127.0.0.1:8765".parse().unwrap()
+}
+
+impl Boundary {
+    pub(super) fn oauth(&self) -> &OAuth {
+        &self.oauth
+    }
 }
 
 struct SessionOwner {
@@ -59,7 +71,7 @@ impl Drop for SessionOwner {
 }
 #[derive(Clone)]
 struct SessionCancellation(CancellationToken);
-struct Boundary {
+pub(super) struct Boundary {
     oauth: OAuth,
     origins: Vec<String>,
     owners: Mutex<HashMap<String, SessionOwner>>,
@@ -472,7 +484,8 @@ pub(super) fn run(path: &str, allow_config_import: bool) -> Result<()> {
         let metadata2 = metadata.clone();
         let router = mcp
             .route("/.well-known/oauth-protected-resource/mcp", get(move || async move { Json(metadata) }))
-            .route("/.well-known/oauth-protected-resource", get(move || async move { Json(metadata2) }));
+            .route("/.well-known/oauth-protected-resource", get(move || async move { Json(metadata2) }))
+            .merge(super::webui::routes(state.clone(), config.web_ui));
         let listener = tokio::net::TcpListener::bind(config.bind).await.context("bind authenticated MCP listener")?;
         eprintln!("MeatShell authenticated MCP listening on http://{}/mcp; HTTPS reverse proxy required", listener.local_addr()?);
         let reap_state = state.clone();

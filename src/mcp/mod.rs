@@ -12,6 +12,9 @@ mod http;
 #[path = "impls/oauth.rs"]
 mod oauth;
 
+#[path = "impls/webui.rs"]
+mod webui;
+
 pub(crate) fn run(args: &[String]) -> anyhow::Result<()> {
     if let Some(index) = args.iter().position(|arg| arg == "--http-config") {
         anyhow::ensure!(index + 2 == args.len(), "--http-config requires one config path and must be last");

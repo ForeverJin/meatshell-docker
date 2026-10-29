@@ -83,6 +83,14 @@ pub fn verify(host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
     }
 }
 
+/// Remember (or replace) a key supplied in OpenSSH one-line form, e.g. from a
+/// confirmation dialog that displayed its fingerprint. The line is parsed
+/// first so malformed input can never end up in the store.
+pub fn remember_line(host: &str, port: u16, key_line: &str) -> Result<()> {
+    let key = PublicKey::from_openssh(key_line.trim()).context("invalid host public key")?;
+    remember(host, port, &key)
+}
+
 /// Remember (or replace) the key for `host:port`. Rewrites the file with any
 /// stale entry for the same id removed, then appends the new one.
 pub fn remember(host: &str, port: u16, key: &PublicKey) -> Result<()> {

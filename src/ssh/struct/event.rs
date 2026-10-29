@@ -27,6 +27,10 @@ pub enum SessionEvent {
         port: u16,
         key_type: String,
         fingerprint: String,
+        /// The presented key in OpenSSH one-line form (`type base64`). Carried
+        /// so a headless front-end can store exactly the key it displayed,
+        /// without reconnecting and risking a different key.
+        key_line: String,
         /// True when a *different* key was previously stored (possible MITM).
         changed: bool,
         responder: HostKeyResponder,

@@ -1593,6 +1593,103 @@ fn append_bounded(target: &mut Vec<u8>, data: &[u8], limit: usize, truncated: &m
     *truncated |= take < data.len();
 }
 
+/// Outcome of a connection probe for headless front-ends. Prompts cannot be
+/// answered inside the probe, so the caller gets the details and decides.
+pub enum ProbeOutcome {
+    Ok,
+    /// The server's host key is unknown or changed; nothing was trusted.
+    HostKey {
+        host: String,
+        port: u16,
+        key_type: String,
+        fingerprint: String,
+        /// OpenSSH one-line form, exactly the key whose fingerprint is above.
+        key_line: String,
+        changed: bool,
+    },
+    MissingCredentials {
+        need_user: bool,
+        need_password: bool,
+    },
+    MfaRequired {
+        prompt: String,
+    },
+}
+
+/// Connect and authenticate without opening a channel, then disconnect.
+///
+/// Interactive prompts are declined (`HostKeyPrompt` is answered "no",
+/// credential/MFA prompts "cancel") and reported to the caller instead. This
+/// keeps host-key trust an explicit operator decision while letting a web UI
+/// show the fingerprint and offer to remember it.
+pub async fn probe_connection(
+    session: Session,
+    jump: Vec<Session>,
+    timeout: std::time::Duration,
+) -> Result<ProbeOutcome> {
+    let config = ssh_client_config();
+    let (events, mut rx) = mpsc::unbounded_channel();
+
+    let attempt = async {
+        let (mut handle, mut jump_handle, mut remote_forwards) =
+            connect_ssh(&session, &jump, config.clone(), &events).await?;
+        let auth = authenticate_session(
+            &mut handle,
+            &mut jump_handle,
+            &mut remote_forwards,
+            &session,
+            &jump,
+            config,
+            &events,
+        )
+        .await?;
+        disconnect_ssh(&handle, "connection probe").await;
+        for hop in jump_handle.iter() {
+            disconnect_ssh(hop, "connection probe").await;
+        }
+        match auth {
+            AuthResult::Success => Ok(ProbeOutcome::Ok),
+            AuthResult::Cancelled => Err(anyhow!("{}", t("已取消登录", "login cancelled"))),
+            AuthResult::Failed => Err(anyhow!("{}", t("认证失败", "authentication failed"))),
+        }
+    };
+    tokio::pin!(attempt);
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut attempt => return result,
+            _ = &mut deadline => return Err(anyhow!("{}", t("连接超时", "connection timed out"))),
+            event = rx.recv() => {
+                let Some(event) = event else { continue };
+                match event {
+                    SessionEvent::HostKeyPrompt {
+                        host, port, key_type, fingerprint, key_line, changed, responder,
+                    } => {
+                        responder.respond(false);
+                        return Ok(ProbeOutcome::HostKey {
+                            host, port, key_type, fingerprint, key_line, changed,
+                        });
+                    }
+                    SessionEvent::CredentialPrompt {
+                        need_user, need_password, responder, ..
+                    } => {
+                        responder.respond(None);
+                        return Ok(ProbeOutcome::MissingCredentials { need_user, need_password });
+                    }
+                    SessionEvent::MfaPrompt { prompt, responder, .. } => {
+                        responder.respond(None);
+                        return Ok(ProbeOutcome::MfaRequired { prompt });
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 async fn run_session(
     session: Session,
     jump: Vec<Session>,
@@ -2958,6 +3055,7 @@ pub(crate) async fn verify_host_key(
                 port,
                 key_type: key.algorithm().to_string(),
                 fingerprint: crate::ssh::known_hosts::fingerprint(key),
+                key_line: key.to_openssh().unwrap_or_default(),
                 changed,
                 responder: HostKeyResponder::new(tx),
             });
