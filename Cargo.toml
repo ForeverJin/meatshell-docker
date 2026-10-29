@@ -1,0 +1,113 @@
+[package]
+name = "meatshell"
+version = "0.8.0"
+edition = "2021"
+authors = ["meatshell contributors"]
+description = "Headless MeatShell: SSH/SFTP automation CLI and authenticated MCP server"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ForeverJin/meatshell-docker"
+readme = "README.md"
+rust-version = "1.88"
+
+[package.metadata.deb]
+extended-description = "Headless MeatShell: SSH/SFTP automation CLI and authenticated MCP HTTP service."
+depends = "$auto"
+# Upstream-built package: the version is the release version alone, without
+# cargo-deb's default Debian revision "-1".
+revision = ""
+section = "net"
+priority = "optional"
+assets = [
+    ["target/release/meatshell", "usr/bin/meatshell", "755"],
+    ["THIRD_PARTY_NOTICES.md", "usr/share/doc/meatshell/", "644"],
+    ["docs/REMOTE_MCP.md", "usr/share/doc/meatshell/", "644"],
+]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+glob = "0.3"
+encoding_rs = "0.8"
+anyhow = "1"
+directories = "5"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "time", "fs", "signal"] }
+# Pinned to 0.49: RUSTSEC-2026-0154 (an unbounded-allocation DoS in russh's
+# ssh-AGENT frame parsing) is fixed only in >= 0.60.3, which drags in pre-release
+# crypto crates. meatshell never uses the ssh-agent, so the advisory is not
+# reachable here — see audit.toml. Revisit once russh's deps leave the -rc channel.
+russh = "0.49"
+ssh-key = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+async-trait = "0.1"
+futures = "0.3"
+# 0.16.2+ clamps the saved cursor on resize; older versions panic after
+# resizing inside nano/vim and leaving the alternate screen (#490).
+# The automation paths keep a small vt100 parser to read prompt state.
+vt100 = "0.16.2"
+russh-sftp = "2"
+# Zeroes password buffers on drop so plaintext credentials don't linger in
+# freed heap memory (core dumps / debuggers / proc/pid/mem).
+zeroize = "1"
+# SOCKS5 proxy tunnelling for SSH/SFTP in network-restricted environments.
+# (HTTP CONNECT proxies are handled in src/proxy.rs without an extra crate.)
+tokio-socks = "0.5"
+base64 = "0.22"
+# Native PuTTY PPK v2/v3 private-key loading (#281). Conversion stays entirely
+# in memory: AES-CBC decrypts encrypted key blobs, Argon2 handles PPKv3 key
+# derivation, and HMAC verifies the file before it reaches the SSH parser.
+aes = "0.8"
+argon2 = "0.5"
+cbc = "0.1"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+# OS locks serialize configuration writes across CLI and service processes.
+fs2 = "0.4.3"
+# FinalShell connection exports derive a DES key with MD5 using java.util.Random.
+des = "0.8"
+md5 = "0.7"
+# ChaCha20-Poly1305 AEAD for encrypting passwords at rest in sessions.json.
+chacha20poly1305 = "0.10"
+
+# Official MCP HTTP transport and externally issued OAuth JWT verification.
+[dependencies.rmcp]
+version = "=2.2.0"
+default-features = false
+features = ["server", "transport-streamable-http-server"]
+
+[dependencies.axum]
+version = "0.8"
+
+[dependencies.jsonwebtoken]
+version = "9.3"
+
+[dependencies.tokio-util]
+version = "0.7"
+
+[dependencies.url]
+version = "2"
+
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))'.dependencies]
+jemallocator = "0.5"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+mimalloc = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 1
