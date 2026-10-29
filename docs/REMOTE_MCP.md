@@ -336,7 +336,11 @@ separately in the intended deployment before calling the service connected.
   Refreshing an OAuth token for the same subject can continue a live session;
   subject changes cannot. Sessions live in memory: a restart drops them, and an
   `initialize` carrying an unknown or expired id starts a fresh session instead
-  of failing, so a restarted service does not leave clients stuck
+  of failing, so a restarted service does not leave clients stuck. With
+  `"unknown_session": "stateless"` in `http.json`, any other request carrying an
+  unknown id is served without protocol-session state (no cross-request
+  cancellation) rather than failing with 404; the default `reject` keeps strict
+  spec behaviour
 - 1 MiB HTTP body limit, 5-second body-read deadline, 10-second protocol-header
   response deadline, 16 tool calls/response streams; control notifications retain
   separate admission capacity

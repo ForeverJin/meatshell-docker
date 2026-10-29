@@ -11,7 +11,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use futures::StreamExt;
+use futures::{future::BoxFuture, StreamExt};
 use rmcp::{
     model::{
         CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListToolsResult,
@@ -19,14 +19,18 @@ use rmcp::{
     },
     service::RequestContext,
     transport::streamable_http_server::{
-        session::{local::LocalSessionManager, SessionManager},
+        session::{local::LocalSessionManager, never::NeverSessionManager, SessionManager},
         StreamableHttpServerConfig, StreamableHttpService,
     },
     ErrorData, RoleServer, ServerHandler,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, convert::Infallible, net::SocketAddr, path::Path, sync::Arc,
+    task::{Context as TaskContext, Poll}, time::Duration,
+};
+use tower::Service;
 use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 
@@ -45,6 +49,21 @@ struct HttpConfig {
     /// Serve the operator web UI (session management) on the same listener.
     #[serde(default = "default_web_ui")]
     web_ui: bool,
+    /// What to do with a `Mcp-Session-Id` this process does not know.
+    ///
+    /// `reject` (default) answers 404 as the MCP spec expects. `stateless`
+    /// serves that one request without protocol-session state instead, which
+    /// keeps clients alive that keep replaying an id from before a restart.
+    #[serde(default)]
+    unknown_session: UnknownSessionPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum UnknownSessionPolicy {
+    #[default]
+    Reject,
+    Stateless,
 }
 fn default_web_ui() -> bool {
     true
@@ -71,6 +90,10 @@ impl Drop for SessionOwner {
 }
 #[derive(Clone)]
 struct SessionCancellation(CancellationToken);
+/// Marks a request the guard decided to serve without protocol-session state.
+#[derive(Clone, Copy)]
+struct StatelessFallback;
+
 pub(super) struct Boundary {
     oauth: OAuth,
     origins: Vec<String>,
@@ -79,6 +102,7 @@ pub(super) struct Boundary {
     sessions: Arc<LocalSessionManager>,
     requests: Semaphore,
     streams: Arc<Semaphore>,
+    stateless_unknown: bool,
 }
 
 #[derive(Clone)]
@@ -309,6 +333,7 @@ async fn guard(State(state): State<Arc<Boundary>>, request: Request, next: Next)
     // longer know simply starts a fresh session, as the MCP spec's 404 recovery
     // asks the client to do — but many clients never retry without the header.
     let mut session = session;
+    let mut stateless_fallback = false;
     let is_initialize = method == Method::POST
         && parsed
             .as_ref()
@@ -326,6 +351,15 @@ async fn guard(State(state): State<Arc<Boundary>>, request: Request, next: Next)
             }
             _ if is_initialize => {
                 owners.remove(&id);
+                session = None;
+                None
+            }
+            _ if state.stateless_unknown && method == Method::POST => {
+                // Compatibility mode: a client still replaying an id from a
+                // restarted process gets this request served without session
+                // state instead of a 404 it may never recover from.
+                tracing::debug!("serving request with unknown session id statelessly");
+                stateless_fallback = true;
                 session = None;
                 None
             }
@@ -363,7 +397,7 @@ async fn guard(State(state): State<Arc<Boundary>>, request: Request, next: Next)
     };
     // Serialize creation with cleanup so a timed-out initialization cannot
     // leave an unowned SDK session alive forever.
-    let _initialize = if session.is_none() {
+    let _initialize = if session.is_none() && !stateless_fallback {
         if method != Method::POST {
             return failure(StatusCode::BAD_REQUEST, "session id required");
         }
@@ -387,6 +421,12 @@ async fn guard(State(state): State<Arc<Boundary>>, request: Request, next: Next)
     parts.extensions.insert(principal.clone());
     if let Some(cancel) = session_cancel {
         parts.extensions.insert(cancel);
+    }
+    if stateless_fallback {
+        parts.extensions.insert(StatelessFallback);
+        // Tool handlers require a session cancellation slot; without a protocol
+        // session it simply cannot be cancelled from another request.
+        parts.extensions.insert(SessionCancellation(CancellationToken::new()));
     }
     // Do not propagate bearer tokens into the SDK's request context/debug view.
     parts.headers.remove(header::AUTHORIZATION);
@@ -461,6 +501,38 @@ async fn cleanup(state: &Boundary, all: bool) {
     }
 }
 
+/// Routes each `/mcp` request to the stateful SDK service, or to the stateless
+/// one when the guard marked it as a fallback.
+#[derive(Clone)]
+struct McpDispatch {
+    stateful: StreamableHttpService<HttpService, LocalSessionManager>,
+    stateless: StreamableHttpService<HttpService, NeverSessionManager>,
+}
+
+impl Service<Request> for McpDispatch {
+    type Response = Response;
+    type Error = Infallible;
+    type Future = BoxFuture<'static, Result<Response, Infallible>>;
+
+    fn poll_ready(&mut self, _cx: &mut TaskContext<'_>) -> Poll<Result<(), Infallible>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: Request) -> Self::Future {
+        let stateless = request.extensions().get::<StatelessFallback>().is_some();
+        let mut stateful = self.stateful.clone();
+        let mut stateless_service = self.stateless.clone();
+        Box::pin(async move {
+            let response = if stateless {
+                stateless_service.call(request).await?
+            } else {
+                stateful.call(request).await?
+            };
+            Ok(response.map(Body::new))
+        })
+    }
+}
+
 pub(super) fn run(path: &str, allow_config_import: bool) -> Result<()> {
     ensure!(
         std::fs::metadata(path)
@@ -496,13 +568,27 @@ pub(super) fn run(path: &str, allow_config_import: bool) -> Result<()> {
         manager.session_config.completed_cache_ttl = Duration::ZERO;
         let sessions = Arc::new(manager);
         let state = Arc::new(Boundary { oauth, origins: config.allowed_origins, owners: Mutex::new(HashMap::new()),
-            initialize_lock: Mutex::new(()), sessions: sessions.clone(), requests: Semaphore::new(32), streams: Arc::new(Semaphore::new(16)) });
+            initialize_lock: Mutex::new(()), sessions: sessions.clone(), requests: Semaphore::new(32),
+            streams: Arc::new(Semaphore::new(16)),
+            stateless_unknown: matches!(config.unknown_session, UnknownSessionPolicy::Stateless) });
         let shutdown = CancellationToken::new();
         let tools = HttpTools { allow_config_import, scope: state.oauth.config.required_scope.clone(), calls: Arc::new(Semaphore::new(16)) };
-        let service = StreamableHttpService::new(move || Ok(HttpService(tools.clone())), sessions,
-            StreamableHttpServerConfig::default().with_allowed_hosts([public_authority, config.bind.to_string()])
-                .with_cancellation_token(shutdown.child_token()));
-        let mcp = Router::new().nest_service("/mcp", service)
+        let base = StreamableHttpServerConfig::default()
+            .with_allowed_hosts([public_authority, config.bind.to_string()])
+            .with_cancellation_token(shutdown.child_token());
+        let factory = move || Ok(HttpService(tools.clone()));
+        let stateful = StreamableHttpService::new(
+            factory.clone(),
+            sessions,
+            base.clone().with_stateful_mode(true),
+        );
+        let stateless = StreamableHttpService::new(
+            factory,
+            Arc::new(NeverSessionManager::default()),
+            base.with_stateful_mode(false),
+        );
+        let mcp = Router::new()
+            .nest_service("/mcp", McpDispatch { stateful, stateless })
             .layer(middleware::from_fn_with_state(state.clone(), guard));
         let metadata = state.oauth.metadata();
         let metadata2 = metadata.clone();

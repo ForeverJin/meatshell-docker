@@ -56,6 +56,9 @@ zeroize = "1"
 # SOCKS5 proxy tunnelling for SSH/SFTP in network-restricted environments.
 # (HTTP CONNECT proxies are handled in src/proxy.rs without an extra crate.)
 tokio-socks = "0.5"
+# Service trait for the /mcp stateful/stateless dispatcher (already in the tree
+# through axum).
+tower = "0.5"
 base64 = "0.22"
 # Native PuTTY PPK v2/v3 private-key loading (#281). Conversion stays entirely
 # in memory: AES-CBC decrypts encrypted key blobs, Argon2 handles PPKv3 key

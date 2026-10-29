@@ -7,6 +7,9 @@
     "resource": "https://shell.example.com/mcp",
     "jwks_file": "public-jwks.json",
     "required_scope": "meatshell:mcp",
-    "allowed_subjects": ["REPLACE_WITH_A_SUBJECT"]
-  }
+    "allowed_subjects": [
+      "REPLACE_WITH_A_SUBJECT"
+    ]
+  },
+  "unknown_session": "stateless"
 }
