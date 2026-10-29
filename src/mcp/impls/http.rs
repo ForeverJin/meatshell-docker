@@ -31,7 +31,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 const MAX_BODY: usize = 1024 * 1024;
-const SESSION_TTL: u64 = 15 * 60;
+const SESSION_TTL: u64 = 60 * 60;
 const MAX_SESSIONS: usize = 64;
 
 #[derive(Deserialize)]
@@ -288,22 +288,6 @@ async fn guard(State(state): State<Arc<Boundary>>, request: Request, next: Next)
     if request.headers().get_all("mcp-session-id").iter().count() > 1 {
         return failure(StatusCode::BAD_REQUEST, "ambiguous session id");
     }
-    let session_cancel = if let Some(session) = &session {
-        let owners = state.owners.lock().await;
-        let Some(owner) = owners
-            .get(session)
-            .filter(|owner| owner.subject == principal.subject && owner.expires_at > oauth::now())
-        else {
-            return failure(
-                StatusCode::NOT_FOUND,
-                "MCP session not found; initialize again",
-            );
-        };
-        principal.expires_at = principal.expires_at.min(owner.expires_at);
-        Some(SessionCancellation(owner.cancellation.clone()))
-    } else {
-        None
-    };
     let method = request.method().clone();
     let (mut parts, body) = request.into_parts();
     let body = match tokio::time::timeout(Duration::from_secs(5), to_bytes(body, MAX_BODY)).await {
@@ -319,6 +303,46 @@ async fn guard(State(state): State<Arc<Boundary>>, request: Request, next: Next)
     } else {
         None
     };
+    // Resolve the client's session id now that the method/body are known. A
+    // stale id must not brick the client: servers lose their in-memory sessions
+    // on restart (and after SESSION_TTL), so an initialize carrying an id we no
+    // longer know simply starts a fresh session, as the MCP spec's 404 recovery
+    // asks the client to do — but many clients never retry without the header.
+    let mut session = session;
+    let is_initialize = method == Method::POST
+        && parsed
+            .as_ref()
+            .is_some_and(|value| value["method"] == "initialize");
+    let session_cancel = if let Some(id) = session.clone() {
+        let mut owners = state.owners.lock().await;
+        match owners.get_mut(&id) {
+            Some(owner)
+                if owner.subject == principal.subject && owner.expires_at > oauth::now() =>
+            {
+                // Sliding expiry: an actively used session keeps living.
+                owner.expires_at = oauth::now() + SESSION_TTL;
+                principal.expires_at = principal.expires_at.min(owner.expires_at);
+                Some(SessionCancellation(owner.cancellation.clone()))
+            }
+            _ if is_initialize => {
+                owners.remove(&id);
+                session = None;
+                None
+            }
+            _ => {
+                return failure(
+                    StatusCode::NOT_FOUND,
+                    "MCP session not found; initialize again",
+                )
+            }
+        }
+    } else {
+        None
+    };
+    if session.is_none() {
+        // Do not forward a stale id; the SDK must create a new session.
+        parts.headers.remove("mcp-session-id");
+    }
     let has_id = parsed
         .as_ref()
         .is_some_and(|value| value.get("id").is_some());

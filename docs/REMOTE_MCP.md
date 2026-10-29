@@ -331,9 +331,12 @@ separately in the intended deployment before calling the service connected.
   on every request; invalid tokens return 401, insufficient permission 403
 - MCP session IDs bind to the authenticated subject of the configured issuer;
   IDs belonging to another subject/unknown/expired IDs all return 404
-- At most 64 protocol sessions, 15-minute absolute lifetime, SDK idle cleanup;
-  clients must reinitialize after expiry. Refreshing an OAuth token for the same
-  subject can continue a live session; subject changes cannot
+- At most 64 protocol sessions. A session expires after one hour without use
+  (the deadline slides on every request), and the SDK reaps idle state.
+  Refreshing an OAuth token for the same subject can continue a live session;
+  subject changes cannot. Sessions live in memory: a restart drops them, and an
+  `initialize` carrying an unknown or expired id starts a fresh session instead
+  of failing, so a restarted service does not leave clients stuck
 - 1 MiB HTTP body limit, 5-second body-read deadline, 10-second protocol-header
   response deadline, 16 tool calls/response streams; control notifications retain
   separate admission capacity
