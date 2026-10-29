@@ -1,6 +1,7 @@
 {
   "bind": "0.0.0.0:8765",
   "allowed_origins": [],
+  "web_ui": true,
   "oauth": {
     "issuer": "https://meatshell.local/",
     "resource": "https://shell.example.com/mcp",

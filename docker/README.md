@@ -112,6 +112,28 @@ token 的 `exp` 可以设得比 300 秒长（例如 `--ttl 86400`）；服务对
 必须接入真实 IdP，并把 `issuer` / `resource` / `jwks_file` 换成该 IdP 的配置，
 见 [`docs/REMOTE_MCP.md`](../docs/REMOTE_MCP.md)。
 
+## 6. Web 管理界面
+
+服务同时在同一个端口提供连接管理页面：`http://192.168.8.114:8765/`。
+
+- 登录：粘贴一个有效的 Bearer token（就是 MCP 用的那个，永久 token 也可以）。
+  服务用 `http.json` 里同一套 OAuth 配置校验，成功后下发 HttpOnly +
+  SameSite=Strict 的会话 cookie，token 不会存进浏览器。
+- 功能：会话列表（搜索、分组）、新建/编辑/删除、测试连接、主机密钥指纹确认。
+  测试连接时如果遇到未知主机密钥，页面会显示 SHA256 指纹；核对服务器控制台后点
+  “信任并重试”，密钥写入 `data/known_hosts`，与手工预置格式一致。
+- 凭据只写不回读：页面只能看到“已存密码/已存密钥”的标记，API 不返回密码或
+  私钥内容；编辑时留空表示保持原值，勾选“清除”才会删除。
+- 测试连接只支持 SSH，且要求用户名/密码或私钥已经保存（headless 服务无法弹框
+  询问）；需要二次验证（MFA/OTP）的服务器无法在页面里完成登录。
+- 私钥路径按**容器内**路径解析；用 `private_key_path` 时要额外挂载，例如
+  `-v "$PWD/keys:/keys:ro"`，然后填 `/keys/id_ed25519`。内联私钥没有这个限制。
+- 不想要页面时在 `config/http.json` 里设 `"web_ui": false` 后重启。
+
+安全边界：能登录页面等价于拿到该 profile 的完整操作权（可增删连接、可让服务用
+已存凭据连 SSH），所以 token 要当管理员密码保管。页面启用了 CSP、禁止被 iframe
+嵌入，写操作要求自定义头 `X-Ms-Web` 且校验 Origin，跨站请求无法直接调用 API。
+
 ## 6. 接入已有会话
 
 ```bash

@@ -99,6 +99,9 @@ python3 docker/mint-token.py init --config-dir config --key secrets/jwt-key.pem 
 docker compose build && docker compose up -d
 ```
 
+服务在同一端口还提供连接管理的 Web 页面（`http://<host>:8765/`，用 MCP token
+登录），可以增删改连接、测试连通性并确认主机密钥指纹。
+
 镜像基于 `debian:bookworm-slim`，只包含 CLI/MCP 二进制（无 GUI 依赖），以非
 root、只读根文件系统运行。配置、反向代理、`known_hosts` 预置、令牌签发和
 运维说明都在 [`docker/README.md`](docker/README.md)。

@@ -6,6 +6,11 @@ standard MCP Streamable HTTP protocol at `/mcp`, using the official Rust MCP
 SDK. This tree is the headless build: there is no GUI, and running without
 arguments prints usage instead of opening a window.
 
+The same listener also serves an operator web UI at `/` (disabled with
+`"web_ui": false`): paste an access token once, then manage saved connections,
+run connection tests and confirm host-key fingerprints from the browser. See
+`docker/README.md` for its behaviour and boundaries.
+
 This is an **OAuth resource server**, not an identity provider. It verifies
 RS256 access tokens from an established external OAuth 2.1 / OIDC provider.
 You must configure that provider and an HTTPS reverse proxy before connecting
