@@ -87,7 +87,7 @@ pub(crate) fn default_quick_panel_height() -> f32 {
 }
 
 /// On-disk layout. Keep additive to ease forward-compat.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigFile {
     #[serde(default)]
     pub sessions: Vec<Session>,
@@ -356,4 +356,30 @@ pub(crate) struct ExportFile {
     /// Format marker / version so the schema can evolve later.
     pub(crate) meatshell_export: u32,
     pub(crate) sessions: Vec<Session>,
+}
+
+impl Default for ConfigFile {
+    /// `#[derive(Default)]` would hand every field its type default (false, 0,
+    /// empty) and silently ignore the serde `default = ...` values, so a fresh
+    /// profile would come up with the MCP gates off. Run the serde defaults
+    /// instead: every field has one, so an empty object fills the struct.
+    fn default() -> Self {
+        serde_json::from_str("{}")
+            .expect("empty object fills every ConfigFile field from its serde default")
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_profile_matches_documented_defaults() {
+        let fresh = ConfigFile::default();
+        assert!(fresh.mcp_enabled);
+        assert!(fresh.mcp_use_saved_credentials);
+        assert!(fresh.mcp_allow_commands);
+        assert!(fresh.mcp_allow_file_transfers);
+        assert!(fresh.sessions.is_empty());
+    }
 }
