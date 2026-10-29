@@ -59,6 +59,13 @@ python3 docker/mint-token.py init \
 - `config/public-jwks.json`：对应公钥（只有 `kty/kid/alg/use/n/e`）
 - `config/http.json`：`bind`、issuer、resource、required scope、允许的 subject
 
+关于会话兼容性：`"unknown_session"` 控制服务端不认识请求里的
+`Mcp-Session-Id` 时的行为。`"reject"`（默认）按 MCP 规范回 404；
+`"stateless"` 表示把这一次请求按无状态处理，客户端在服务重启后继续重放旧 ID
+也不会卡死（`tools/list`、`tools/call` 照常工作）。代价是这类回退请求不能被
+另一个 `notifications/cancelled` 取消，仍受 300 秒上限约束。建议填
+`"stateless"`。
+
 关于 `resource` 和 Host 校验：服务要求请求的 `Host` 等于 `resource` 的
 authority 或 `bind` 地址。因此**局域网直连**时 `resource` 必须带端口
 （`https://192.168.8.114:8765/mcp`）；走 Caddy 时改成
