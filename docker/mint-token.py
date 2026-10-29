@@ -47,6 +47,9 @@ except ImportError:  # pragma: no cover
 
 SCOPE = "meatshell:mcp"
 KID = "meatshell-local"
+# MeatShell requires an `exp` claim, so "never expires" is expressed as the last
+# representable second (9999-12-31T23:59:59Z) rather than a missing claim.
+PERMANENT_EXP = 253402300799
 
 
 def b64url(data: bytes) -> str:
@@ -125,7 +128,7 @@ def cmd_mint(args: argparse.Namespace) -> None:
         "sub": args.subject,
         "scope": args.scope,
         "iat": now,
-        "exp": now + args.ttl,
+        "exp": PERMANENT_EXP if args.ttl == 0 else now + args.ttl,
     }
     signing_input = ".".join(
         b64url(json.dumps(part, separators=(",", ":")).encode())
@@ -155,7 +158,8 @@ def main() -> None:
     mint.add_argument("--resource", required=True)
     mint.add_argument("--subject", required=True)
     mint.add_argument("--scope", default=SCOPE)
-    mint.add_argument("--ttl", type=int, default=300)
+    mint.add_argument("--ttl", type=int, default=300,
+                      help="seconds until exp; 0 = never expires (year 9999)")
     mint.set_defaults(func=cmd_mint)
 
     args = parser.parse_args()
