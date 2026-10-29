@@ -1,0 +1,14 @@
+.git
+.github
+target
+data
+config
+secrets
+caddy
+out
+tests
+docs/screenshots
+*.tar.gz
+*.zip
+.env
+__pycache__

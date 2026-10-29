@@ -1,4 +1,10 @@
 /target
+/secrets
+/data
+/config
+/caddy
+/out
+/.env
 *.rs.bk
 .DS_Store
 /.vscode

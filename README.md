@@ -91,5 +91,14 @@ tests/              Python 端到端回归（HTTP/OAuth、配置导入、跳板�
 
 ## 容器化
 
-Dockerfile 与 compose 还没有放进本仓库，属于下一步工作；当前产物是一个
-自包含的 Linux 二进制（glibc ≥ 2.35），可直接拷进镜像。
+```bash
+mkdir -p data && chmod 700 data
+python3 docker/mint-token.py init --config-dir config --key secrets/jwt-key.pem \
+  --issuer https://meatshell.local/ --resource https://192.168.8.114:8765/mcp \
+  --subject mrqiang
+docker compose build && docker compose up -d
+```
+
+镜像基于 `debian:bookworm-slim`，只包含 CLI/MCP 二进制（无 GUI 依赖），以非
+root、只读根文件系统运行。配置、反向代理、`known_hosts` 预置、令牌签发和
+运维说明都在 [`docker/README.md`](docker/README.md)。

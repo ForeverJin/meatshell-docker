@@ -1,0 +1,69 @@
+# Headless MeatShell: CLI + authenticated MCP HTTP service.
+#
+#   docker compose build
+#   docker compose up -d
+#   docker compose logs -f
+#
+# Host layout:
+#   ./data     profile: sessions.json, known_hosts, logs (owned by MEATSHELL_UID)
+#   ./config   http.json + public-jwks.json (mounted read-only)
+#   ./secrets  RS256 signing key for docker/mint-token.py (never mounted)
+
+name: meatshell
+
+services:
+  meatshell:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDER_BASE: ${BUILDER_BASE:-rust:1-bookworm}
+        RUNTIME_BASE: ${RUNTIME_BASE:-debian:bookworm-slim}
+        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-4}
+        CARGO_REGISTRY_MIRROR: ${CARGO_REGISTRY_MIRROR:-}
+        MEATSHELL_UID: ${MEATSHELL_UID:-1000}
+        MEATSHELL_GID: ${MEATSHELL_GID:-1000}
+    image: meatshell-docker:${MEATSHELL_TAG:-0.8.0}
+    container_name: meatshell-mcp
+    restart: unless-stopped
+    user: "${MEATSHELL_UID:-1000}:${MEATSHELL_GID:-1000}"
+    environment:
+      MEATSHELL_DATA_DIR: /data
+      MEATSHELL_HTTP_CONFIG: /etc/meatshell/http.json
+      TZ: ${TZ:-Asia/Shanghai}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - ./data:/data
+      - ./config:/etc/meatshell:ro
+    # The listener speaks plain HTTP; terminate TLS in a reverse proxy.
+    # Binding the LAN address directly is only for a private, firewalled test.
+    ports:
+      - "${MEATSHELL_PUBLISH:-127.0.0.1}:${MEATSHELL_PORT:-8765}:8765"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 20s
+
+  # Optional HTTPS termination:
+  #   MEATSHELL_DOMAIN=shell.example.com docker compose --profile proxy up -d
+  caddy:
+    image: caddy:2.11-alpine
+    profiles: ["proxy"]
+    container_name: meatshell-caddy
+    restart: unless-stopped
+    depends_on:
+      - meatshell
+    environment:
+      MEATSHELL_DOMAIN: ${MEATSHELL_DOMAIN:-shell.example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/data:/data
+      - ./caddy/config:/config

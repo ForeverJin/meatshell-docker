@@ -1,0 +1,24 @@
+{
+	servers {
+		# Lets MeatShell's early 401/408/413 arrive without the proxy draining a
+		# stalled request body first (see docs/REMOTE_MCP.md).
+		enable_full_duplex
+		timeouts {
+			read_header 5s
+			read_body 10s
+			idle 2m
+		}
+	}
+}
+
+{$MEATSHELL_DOMAIN:shell.example.com} {
+	encode zstd gzip
+	reverse_proxy meatshell:8765 {
+		# Stream MCP SSE responses; keep Host and Authorization untouched.
+		flush_interval -1
+	}
+	log {
+		output stdout
+		format console
+	}
+}
